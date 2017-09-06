@@ -7,5 +7,11 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "Liyue Wang<liyuewang@outlook.com>",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@d2l/attributes-client-node": "3.10.0",
+    "uuid":"3.1.0",
+    "bluebird":"3.5.0",
+    "lodash":"4.17.4"
+  }
 }

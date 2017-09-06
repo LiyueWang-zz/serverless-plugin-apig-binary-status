@@ -2,12 +2,15 @@
 const BbPromise = require('bluebird');
 const _ = require( 'lodash' );
 
+const utils = require('./lib/utils');
+
 module.exports = class ApiGatewayBinaryStatus {
 
 	constructor(serverless, options) {
 		this.serverless = serverless;
 		this.options = options;
 		this.provider = this.serverless.getProvider('aws');
+		this.stage = this.options.stage;
 
 		this.hooks = {
 			'after:aws:deploy:finalize:cleanup': this.checkBinarySupportStatus.bind(this),
@@ -18,10 +21,11 @@ module.exports = class ApiGatewayBinaryStatus {
 		this.serverless.cli.log('[serverless-plugin-apig-binary-status] Checking binary support enabled to AWS API Gateway...');
 
 		return BbPromise.bind(this)
-			.then(this.testBinaryEnabled("Before"))
+			.then(utils.createTestData(this.stage))
+			.then(() => new BbPromise(resolve => setTimeout(() => resolve(), 65000)))
 			.then(this.getFunctionsForContentHandling)
 			.then(this.checkContentHandlingEnabled)
-			.then(this.testBinaryEnabled("After"));
+			.then(utils.deleteTestData(this.stage));
 	}
 
 	getFunctionsForContentHandling () {
@@ -30,7 +34,7 @@ module.exports = class ApiGatewayBinaryStatus {
 
 		Object.keys(funcs).forEach((fKey) => {
 			funcs[fKey].events.forEach((e) => {
-				if (e.http && e.http.contentHandling) {
+				if (e.http && e.http.contentHandling && funcs[fKey].checkBinaryStatus) {
 					validFuncs[fKey] = funcs[fKey];
 				}
 			})
@@ -42,9 +46,12 @@ module.exports = class ApiGatewayBinaryStatus {
 		if (!Object.keys(funcs).length) {
 			return;
 		}
-		const apiName = this.provider.naming.getApiGatewayName();
 
 		const apigateway = new this.provider.sdk.APIGateway({
+			region: this.options.region
+		});
+
+		const lambda = new this.provider.sdk.Lambda({
 			region: this.options.region
 		});
 
@@ -52,125 +59,53 @@ module.exports = class ApiGatewayBinaryStatus {
 			statusCode: '200'
 		};
 
-		const funcName = "attributes-dev-api"; //TODO
-		let restApiId;
+		const apiName = this.provider.naming.getApiGatewayName();
+		const MAX_CHECK_NUM = 12;
 
-		let checkIfEnabled = (funcs) => {
-			return apigateway.getRestApis()
-					.promise()
-					.then((apis) => {
-						integrationResponse.restApiId = apis.items.find(api => api.name === apiName).id;
-						restApiId = integrationResponse.restApiId;
+		return utils.getApiGatewayResources(apigateway, apiName)
+			.then(resources => {
+				integrationResponse.restApiId = resources.restApiId;
+				_.mapKeys(funcs, (fValue, fKey)=>{
+					let checkCount = 0;
 
-						return apigateway
-							.getResources({ restApiId: integrationResponse.restApiId })
-							.promise();
-					})
-					.then((resources) => {
-						const results = [];
-						results.push(this.checkBinaryMediaTypes(apigateway, restApiId));
-						_.mapKeys(funcs, (fValue, fKey)=>{
+					utils.setCompressionForFunction(lambda, fValue.name, "true")
+					 .then(() => {
+						let checkIfEnabled = (resources, fValue) => {
+							const results = [];
+							results.push(utils.checkBinaryMediaTypes(apigateway, resources.restApiId));
 							_.map(fValue.events, e => {
 								if (e.http && e.http.contentHandling) {
 									integrationResponse.httpMethod = e.http.method.toUpperCase();
 									integrationResponse.resourceId = resources.items.find(
 									r => r.path === `/${e.http.path}`).id;
-									results.push(this.isContentHandlingEnabled(integrationResponse, e.http.contentHandling, apigateway));
+									results.push(utils.isContentHandlingEnabled(integrationResponse, e.http.contentHandling, apigateway));
 								}
 							})
-						})
-						return Promise.all(results);
-					})
-					.then((results) => {
-						const success = _.every( results, result => result );
+							results.push(utils.testBinaryEnabled(this.stage));
 
-						if( success ) {
-							console.log("All contentHandling enabled, set env compression for lambda function...");
-							this.setCompressionForFunction(funcName);
-						} else {
-							console.log("Some contentHandling not enabled");
-							throw new Error("Some contentHandling not enabled");
-						}
-					})
-					.catch(error =>{
-						console.log(error);
-						setTimeout( ()=>checkIfEnabled(funcs), 5000 );
+							return Promise.all(results)
+									.then((results) => {
+										const success = _.every( results, result => result );
+
+										if( success ) {
+											console.log("[serverless-plugin-apig-binary-status] binary support enabled for api gateway, compression enabled for lambda function");
+										} else {
+											throw new Error("[serverless-plugin-apig-binary-status] binary support not enabled, try again...");
+										}
+									})
+									.catch(error => {
+										if (checkCount < MAX_CHECK_NUM) {
+											setTimeout( () => checkIfEnabled(resources, fValue), 5000 );
+										} else {
+											utils.setCompressionForFunction(lambda, fValue.name, "false");
+										}
+										checkCount = checkCount + 1;
+									});
+						};
+
+						checkIfEnabled(resources, fValue);
 					});
-		};
-
-		checkIfEnabled(funcs);
-	}
-
-	isContentHandlingEnabled (integrationResponse, contentHandling, apigateway) {
-		return apigateway.getIntegrationResponse(integrationResponse)
-				.promise()
-				.then((data) => {
-					// console.log("getIntegrationResponse data: "+JSON.stringify(data, null, 6))
-					if (data.statusCode === '200' && data.contentHandling && data.contentHandling === contentHandling) {
-						return true;
-					}
-					else {
-						return false;
-					}
 				});
+			});
 	}
-
-	checkBinaryMediaTypes(apigateway, restApiId) {
-		const expectedType = "application/json";
-		var params = {
-			restApiId: restApiId
-		};
-
-		return apigateway.getRestApi(params)
-				.promise()
-				.then((data) => {
-					console.log("apigateway.getRestApi data: "+JSON.stringify(data, null, 6))
-					if (data && data.binaryMediaTypes ) {
-						const exist = data.binaryMediaTypes.indexOf(expectedType) > -1;
-						return exist;
-					}
-					else {
-						return false;
-					}
-				});
-	}
-
-	setCompressionForFunction (funcName) {
-		console.log("setCompressionForFunction...");
-		const lambda = new this.provider.sdk.Lambda({
-			region: this.options.region
-		});
-
-		const params = {
-			FunctionName: funcName, 
-  			Qualifier: "1"
-		};
-		return lambda.getFunctionConfiguration(params)
-				.promise()
-				.then((data) => {
-					console.log("lambda.getFunctionConfiguration data: "+JSON.stringify(data, null, 6));
-					if (data && data.Environment && data.Environment.Variables) {
-						return data.Environment.Variables;
-					}
-					else {
-						return {};
-					}
-				})
-				.then((variables) => {
-					
-					variables.ENABLE_COMPRESSION = true;
-					console.log("variables: "+JSON.stringify(variables, null, 6))
-					const environment = {
-						FunctionName: funcName, 
-						Environment: {
-							Variables: variables
-						}
-					};
-
-					return lambda.updateFunctionConfiguration(environment)
-							.promise();
-				});
-
-	}
-
 }
