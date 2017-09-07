@@ -28,12 +28,12 @@ module.exports = class ApiGatewayBinaryStatus {
       .bind(this)
       .then(() => this.createTestData(this.stage))
       .then(() => new BbPromise(resolve => setTimeout(() => resolve(), 65000)))  //replace to depend on serverless-apigwy-binary
-      .then(() => this.getFunctionsForContentHandling())
-      .then((funcs) => this.checkContentHandlingEnabled(funcs))
+      .then(() => this.getFunctions())
+      .then((funcs) => this.checkBinaryEnabled(funcs))
       .then(() => this.deleteTestData(this.stage));
   }
 
-  getFunctionsForContentHandling () {
+  getFunctions () {
     const funcs = this.serverless.service.functions;
     const validFuncs = {};
 
@@ -47,7 +47,7 @@ module.exports = class ApiGatewayBinaryStatus {
     return validFuncs;
   }
 
-  checkContentHandlingEnabled (funcs) {
+  checkBinaryEnabled (funcs) {
     if (!Object.keys(funcs).length) {
       return;
     }
@@ -95,7 +95,7 @@ module.exports = class ApiGatewayBinaryStatus {
                     const success = _.every( results, result => result );
 
                     if( success ) {
-                      console.log("[serverless-plugin-apig-binary-status] binary support enabled for api gateway, compression enabled for lambda function");
+                      console.log("[serverless-plugin-apig-binary-status] binary support enabled for api gateway, enable compression for lambda function");
                     } else {
                       throw new Error("[serverless-plugin-apig-binary-status] binary support not enabled, try again...");
                     }
@@ -104,6 +104,7 @@ module.exports = class ApiGatewayBinaryStatus {
                     if (checkCount < MAX_CHECK_NUM) {
                       setTimeout( () => checkIfEnabled(resources, fValue), 5000 );
                     } else {
+                      console.log("[serverless-plugin-apig-binary-status] binary support not enabled for api gateway, disable compression for lambda function");
                       this.setCompressionForFunction(lambda, fValue.name, "false");
                     }
                     checkCount = checkCount + 1;
