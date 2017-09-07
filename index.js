@@ -12,6 +12,10 @@ module.exports = class ApiGatewayBinaryStatus {
 		this.provider = this.serverless.getProvider('aws');
 		this.stage = this.options.stage;
 
+		Object.assign(this,
+      		utils
+    	);
+
 		this.hooks = {
 			'after:aws:deploy:finalize:cleanup': this.checkBinarySupportStatus.bind(this),
 		};
@@ -20,12 +24,13 @@ module.exports = class ApiGatewayBinaryStatus {
 	checkBinarySupportStatus(){
 		this.serverless.cli.log('[serverless-plugin-apig-binary-status] Checking binary support enabled to AWS API Gateway...');
 
-		return BbPromise.bind(this)
-			.then(utils.createTestData(this.stage))
-			.then(() => new BbPromise(resolve => setTimeout(() => resolve(), 65000)))
-			.then(this.getFunctionsForContentHandling)
-			.then(this.checkContentHandlingEnabled)
-			.then(utils.deleteTestData(this.stage));
+		return BbPromise.resolve()
+			.bind(this)
+			.then(() => this.createTestData(this.stage))
+			.then(() => this.waitTime(65000))
+			.then(() => this.getFunctionsForContentHandling())
+			.then((funcs) => this.checkContentHandlingEnabled(funcs))
+			.then(() => this.deleteTestData(this.stage));
 	}
 
 	getFunctionsForContentHandling () {
@@ -62,26 +67,26 @@ module.exports = class ApiGatewayBinaryStatus {
 		const apiName = this.provider.naming.getApiGatewayName();
 		const MAX_CHECK_NUM = 12;
 
-		return utils.getApiGatewayResources(apigateway, apiName)
+		return this.getApiGatewayResources(apigateway, apiName)
 			.then(resources => {
 				integrationResponse.restApiId = resources.restApiId;
 				_.mapKeys(funcs, (fValue, fKey)=>{
 					let checkCount = 0;
 
-					utils.setCompressionForFunction(lambda, fValue.name, "true")
+					this.setCompressionForFunction(lambda, fValue.name, "true")
 					 .then(() => {
 						let checkIfEnabled = (resources, fValue) => {
 							const results = [];
-							results.push(utils.checkBinaryMediaTypes(apigateway, resources.restApiId));
+							results.push(this.checkBinaryMediaTypes(apigateway, resources.restApiId));
 							_.map(fValue.events, e => {
 								if (e.http && e.http.contentHandling) {
 									integrationResponse.httpMethod = e.http.method.toUpperCase();
 									integrationResponse.resourceId = resources.items.find(
 									r => r.path === `/${e.http.path}`).id;
-									results.push(utils.isContentHandlingEnabled(integrationResponse, e.http.contentHandling, apigateway));
+									results.push(this.isContentHandlingEnabled(integrationResponse, e.http.contentHandling, apigateway));
 								}
 							})
-							results.push(utils.testBinaryEnabled(this.stage));
+							results.push(this.testBinaryEnabled(this.stage));
 
 							return Promise.all(results)
 									.then((results) => {
@@ -97,7 +102,7 @@ module.exports = class ApiGatewayBinaryStatus {
 										if (checkCount < MAX_CHECK_NUM) {
 											setTimeout( () => checkIfEnabled(resources, fValue), 5000 );
 										} else {
-											utils.setCompressionForFunction(lambda, fValue.name, "false");
+											this.setCompressionForFunction(lambda, fValue.name, "false");
 										}
 										checkCount = checkCount + 1;
 									});
