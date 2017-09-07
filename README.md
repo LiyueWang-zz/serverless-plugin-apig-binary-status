@@ -1,6 +1,7 @@
 # serverless-plugin-apig-binary-status
 
-[Serverless framework](https://www.serverless.com) plugin to check binary enabled for API Gateway
+[Serverless framework](https://www.serverless.com) plugin to check binary enabled for API Gateway.
+This plugin is only for internal project purpose. 
 
 ## Installation
 
